@@ -23,6 +23,8 @@ var (
 	pngMagic = []byte{137, 80, 78, 71, 13, 10, 26, 10}
 )
 
+const NULL_SEPERATOR byte = 0
+
 ////////////////////////////////////////////////////////////////////////////////
 
 // Returns nil if sub is contained in s, an error otherwise.
@@ -128,6 +130,19 @@ func Embed(data []byte, k string, v interface{}) ([]byte, error) {
 		val []byte
 	)
 
+	val, err = to_bytes(v)
+
+	if err != nil {
+		return nil, err
+	}
+	return embed(data, k, val)
+}
+
+func to_bytes(v interface{}) ([]byte, error) {
+	var (
+		err error
+		val []byte
+	)
 	switch vt := v.(type) {
 	case int, uint:
 		val = []byte(fmt.Sprintf("%d", vt))
@@ -138,11 +153,7 @@ func Embed(data []byte, k string, v interface{}) ([]byte, error) {
 	default:
 		val, err = json.Marshal(v)
 	}
-
-	if err != nil {
-		return nil, err
-	}
-	return embed(data, k, val)
+	return val, err
 }
 
 // EmbedFile is like `Embed` but accepts the path to a PNG file.
@@ -192,4 +203,82 @@ func ExtractFile(fp string) (map[string][]byte, error) {
 	}
 
 	return Extract(data)
+}
+
+func EmbedITXT(data []byte, k string, v interface{}) ([]byte, error) {
+	var (
+		err error
+		val []byte
+	)
+
+	val, err = to_bytes(v)
+
+	if err != nil {
+		return nil, err
+	}
+	return embedITXT(data, k, val)
+
+}
+
+func embedITXT(data []byte, k string, v []byte) ([]byte, error) {
+	// These fields are not necessary for my use case but just putting them here just in case
+	compression_flag := 0
+	compression_method := 0
+	language_tag := ""
+	translate_keyword := ""
+
+	iTXtChunk := formatITXTChunk(v, k, compression_flag, compression_method, language_tag, translate_keyword)
+	pngChunk, _ := buildChunk(`iTXt`, iTXtChunk)
+
+	out := []byte{}
+	buf := bytes.NewBuffer(data)
+
+	// Magic number.
+	d := buf.Next(len(pngMagic))
+	out = append(out, d...)
+	err := errIfNotSubStr(pngMagic, d)
+	if err != nil {
+		return nil, err
+	}
+
+	// Extract header length, the header type should always be the first, we
+	// inject our custom text data right after this.
+	d = buf.Next(4)
+	out = append(out, d...)
+	sz := binary.BigEndian.Uint32(d)
+
+	// Extract the header tag, data, and CRC (for the header).
+	d = buf.Next(int(sz + 8))
+	out = append(out, d...)
+
+	// Append pngChunk of iTXt chunk.
+	out = append(out, pngChunk...)
+
+	// Add the rest of the actual palette and data info.
+	return append(out, buf.Bytes()...), nil
+}
+
+func formatITXTChunk(text []byte, keyword string, compression_flag int, compression_method int, language_tag string, translated_keyword string) []byte {
+
+	// +------------------+----------------+-----------------+-------------------+---------------+----------------+---------------------+----------------+----------------+
+	// | Keyword          | Null separator | Compression flag| Compression method| Language tag  | Null separator | Translated keyword  | Null separator | Text           |
+	// +------------------+----------------+-----------------+-------------------+---------------+----------------+---------------------+----------------+----------------+
+	// | 1-79 bytes       | 1 byte         | 1 byte          | 1 byte            |0 or more bytes| 1 byte         | 0 or more bytes     | 1 byte         | 0 or more bytes|
+	// +------------------+----------------+-----------------+-------------------+---------------+----------------+---------------------+----------------+----------------+
+
+	// Add keyword
+	iTXtChunk := append([]byte(keyword), NULL_SEPERATOR)
+
+	//Add compression information
+	iTXtChunk = append(iTXtChunk, byte(compression_flag))
+	iTXtChunk = append(iTXtChunk, byte(compression_method))
+
+	iTXtChunk = append(iTXtChunk, []byte(language_tag)...)
+	iTXtChunk = append(iTXtChunk, NULL_SEPERATOR)
+
+	iTXtChunk = append(iTXtChunk, []byte(translated_keyword)...)
+	iTXtChunk = append(iTXtChunk, NULL_SEPERATOR)
+	iTXtChunk = append(iTXtChunk, text...)
+	return iTXtChunk
+
 }
