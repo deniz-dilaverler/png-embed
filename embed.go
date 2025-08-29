@@ -82,14 +82,9 @@ func buildChunk(ct string, data []byte) ([]byte, error) {
 	return append(szbs, bb...), nil
 }
 
-func buildTextChunk(data []byte) []byte {
-	bs, _ := buildChunk(`tEXt`, data)
-	return bs
-}
-
 // embed verifies that the input data slice actually describes a PNG image, and
-// appends the respective (key, value) pair into its `tExt` section(s).
-func embed(data []byte, k string, v []byte) ([]byte, error) {
+// embeds the given png chunk into the png file
+func embed(data []byte, chunk []byte) ([]byte, error) {
 	out := []byte{}
 	buf := bytes.NewBuffer(data)
 
@@ -112,7 +107,7 @@ func embed(data []byte, k string, v []byte) ([]byte, error) {
 	out = append(out, d...)
 
 	// Append tEXt chunk.
-	out = append(out, buildTextChunk(append(append([]byte(k), 0), v...))...)
+	out = append(out, chunk...)
 
 	// Add the rest of the actual palette and data info.
 	return append(out, buf.Bytes()...), nil
@@ -124,7 +119,7 @@ func embed(data []byte, k string, v []byte) ([]byte, error) {
 // pair into a `tEXt` chunk.  The resultant PNG byte-stream is returned, or an
 // error.  The interface `v` is serialized to known types and then to JSON if
 // all else fails.
-func Embed(data []byte, k string, v interface{}) ([]byte, error) {
+func EmbedTEXT(data []byte, k string, v interface{}) ([]byte, error) {
 	var (
 		err error
 		val []byte
@@ -135,7 +130,10 @@ func Embed(data []byte, k string, v interface{}) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return embed(data, k, val)
+	tEXtChunk := formatTEXTChunk(val, k)
+	pngChunk, _ := buildChunk(`tEXt`, tEXtChunk)
+
+	return embed(data, pngChunk)
 }
 
 func to_bytes(v interface{}) ([]byte, error) {
@@ -157,13 +155,14 @@ func to_bytes(v interface{}) ([]byte, error) {
 }
 
 // EmbedFile is like `Embed` but accepts the path to a PNG file.
-func EmbedFile(fp, k string, v interface{}) ([]byte, error) {
+// Embeds to a file's tEXt chunk
+func EmbedTEXTInFile(fp, k string, v interface{}) ([]byte, error) {
 	data, err := ioutil.ReadFile(fp)
 	if err != nil {
 		return nil, err
 	}
 
-	return Embed(data, k, v)
+	return EmbedTEXT(data, k, v)
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -196,6 +195,7 @@ func Extract(data []byte) (map[string][]byte, error) {
 }
 
 // ExtractFile is like `Extract` but accepts the path to a PNG file.
+// Extrats the tEXt from the png
 func ExtractFile(fp string) (map[string][]byte, error) {
 	data, err := ioutil.ReadFile(fp)
 	if err != nil {
@@ -216,48 +216,32 @@ func EmbedITXT(data []byte, k string, v interface{}) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return embedITXT(data, k, val)
-
-}
-
-func embedITXT(data []byte, k string, v []byte) ([]byte, error) {
-	// These fields are not necessary for my use case but just putting them here just in case
 	compression_flag := 0
 	compression_method := 0
 	language_tag := ""
 	translate_keyword := ""
 
-	iTXtChunk := formatITXTChunk(v, k, compression_flag, compression_method, language_tag, translate_keyword)
+	iTXtChunk := formatITXTChunk(val, k, compression_flag, compression_method, language_tag, translate_keyword)
 	pngChunk, _ := buildChunk(`iTXt`, iTXtChunk)
 
-	out := []byte{}
-	buf := bytes.NewBuffer(data)
+	return embed(data, pngChunk)
 
-	// Magic number.
-	d := buf.Next(len(pngMagic))
-	out = append(out, d...)
-	err := errIfNotSubStr(pngMagic, d)
-	if err != nil {
-		return nil, err
-	}
-
-	// Extract header length, the header type should always be the first, we
-	// inject our custom text data right after this.
-	d = buf.Next(4)
-	out = append(out, d...)
-	sz := binary.BigEndian.Uint32(d)
-
-	// Extract the header tag, data, and CRC (for the header).
-	d = buf.Next(int(sz + 8))
-	out = append(out, d...)
-
-	// Append pngChunk of iTXt chunk.
-	out = append(out, pngChunk...)
-
-	// Add the rest of the actual palette and data info.
-	return append(out, buf.Bytes()...), nil
 }
 
+func formatTEXTChunk(text []byte, keyword string) []byte {
+
+	// +----------+----------------+---------+
+	// | Keyword  | Null separator |  Text   |
+	// +----------+----------------+---------+
+	// | 1–79     | 1 byte         | n bytes |
+	// | bytes    |                |         |
+	// +----------+----------------+---------+
+
+	tEXtChunk := append([]byte(keyword), NULL_SEPERATOR)
+	tEXtChunk = append(tEXtChunk, text...)
+	return tEXtChunk
+
+}
 func formatITXTChunk(text []byte, keyword string, compression_flag int, compression_method int, language_tag string, translated_keyword string) []byte {
 
 	// +------------------+----------------+-----------------+-------------------+---------------+----------------+---------------------+----------------+----------------+
