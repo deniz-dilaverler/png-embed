@@ -65,6 +65,11 @@ func main() {
 		}
 		fmt.Printf("File '%s' was successfully embedded and saved as '%s' \n", inputFile, outputFile)
 	}
+
+	mapping, err := pngembed.ExtractITXT(data)
+	fmt.Printf("keyword: %s \n", key)
+	fmt.Printf("text value: %s \n", mapping[key])
+
 }
 
 func init() {

@@ -4,6 +4,7 @@ package pngembed
 ////////////////////////////////////////////////////////////////////////////////
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/binary"
 	"encoding/json"
@@ -169,7 +170,7 @@ func EmbedTEXTInFile(fp, k string, v interface{}) ([]byte, error) {
 
 // Extract processes a stream of raw PNG data, and returns a map of `tEXt`
 // records encoded by this library.
-func Extract(data []byte) (map[string][]byte, error) {
+func ExtractTEXT(data []byte) (map[string][]byte, error) {
 	ret := map[string][]byte{}
 
 	r, err := pngr.NewReader(data, &pngr.ReaderOptions{
@@ -194,15 +195,79 @@ func Extract(data []byte) (map[string][]byte, error) {
 	return ret, err
 }
 
+func readNullTerminated(r *bufio.Reader) (string, error) {
+	data, err := r.ReadBytes(NULL_SEPERATOR)
+	if err != nil {
+		return "", err
+	}
+	return string(data[:len(data)-1]), nil // strip the null terminator
+}
+
+// Returns all itxt text fields and their keyword in a (keyword, text) map
+func ExtractITXT(data []byte) (map[string][]byte, error) {
+	ret := map[string][]byte{}
+
+	r, err := pngr.NewReader(data, &pngr.ReaderOptions{
+		IncludedChunkTypes: []string{`iTXt`},
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	c, err := r.Next()
+	for ; err == nil; c, err = r.Next() {
+		br := bufio.NewReader(bytes.NewReader(c.Data))
+		keyword, err := readNullTerminated(br)
+		if err != nil {
+			return nil, err
+		}
+
+		// 2. Compression flag (1 byte)
+		if _, err := br.Discard(1); err != nil {
+			return nil, fmt.Errorf("discard compression flag: %w", err)
+		}
+
+		// 3. Compression method (1 byte)
+		if _, err := br.Discard(1); err != nil {
+			return nil, fmt.Errorf("discard compression method: %w", err)
+		}
+
+		// 4. Consume Language tag including null-sep
+		_, err = br.ReadBytes(NULL_SEPERATOR)
+		if err != nil {
+			return nil, fmt.Errorf("read language tag: %w", err)
+		}
+
+		// 5. consume Translated keyword including Null-sep
+		_, err = br.ReadBytes(NULL_SEPERATOR)
+		if err != nil {
+			return nil, fmt.Errorf("read translated keyword: %w", err)
+		}
+
+		// 6. Remaining bytes = Text
+		textBytes, err := io.ReadAll(br)
+		if err != nil {
+			return nil, fmt.Errorf("read text: %w", err)
+		}
+		ret[keyword] = textBytes
+
+	}
+	if err == io.EOF {
+		err = nil
+	}
+
+	return ret, err
+}
+
 // ExtractFile is like `Extract` but accepts the path to a PNG file.
 // Extrats the tEXt from the png
-func ExtractFile(fp string) (map[string][]byte, error) {
+func ExtractFileTEXT(fp string) (map[string][]byte, error) {
 	data, err := ioutil.ReadFile(fp)
 	if err != nil {
 		return nil, err
 	}
 
-	return Extract(data)
+	return ExtractTEXT(data)
 }
 
 func EmbedITXT(data []byte, k string, v interface{}) ([]byte, error) {
